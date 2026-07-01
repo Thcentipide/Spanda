@@ -1,0 +1,9 @@
+[package]
+name = "wm-detect"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wm-core = { path = "../wm-core" }
+rand = { workspace = true }
+rand_chacha = { workspace = true }

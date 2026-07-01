@@ -1,0 +1,12 @@
+[package]
+name = "wm-embed"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wm-core = { path = "../wm-core" }
+wm-keys = { path = "../wm-keys" }
+wm-ledger = { path = "../wm-ledger" }
+image = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }

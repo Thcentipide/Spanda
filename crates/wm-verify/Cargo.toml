@@ -1,0 +1,13 @@
+[package]
+name = "wm-verify"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wm-core = { path = "../wm-core" }
+wm-keys = { path = "../wm-keys" }
+wm-detect = { path = "../wm-detect" }
+wm-ledger = { path = "../wm-ledger" }
+image = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
