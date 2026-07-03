@@ -75,6 +75,10 @@ K_master_pub                K_device_pub                     |
 - **K_device_secret / K_device_pub**: Per-device Ed25519 keypairs derived from the master secret via HKDF-SHA256 with a per-device salt (`device_id || nonce`) and info string `"wm-device-key-v1"`. The device receives its secret key and a certificate signed by the master key during provisioning.
 - **AuthorityCertificate**: Binds a device's public key to an organization name (e.g. "Google", "Apple", "Stability AI"), signed by `K_master_secret`. Contains `device_pub`, `org_name`, `device_id`, `expiry_ms`, `nonce`, and the master signature. Verified against `K_master_pub` by any ledger node or verifier.
 
+> [!IMPORTANT]
+> **Key Governance & Operational Security:**
+> The `K_master_secret` is the ultimate secret in the system. Its use for re-deriving device keys and performing Layer 4 authority extraction is restricted to **extremely unusual, final cases** (such as official court orders, subpoenas, or critical legal requests). Under all normal operations, verification is conducted purely offline using the public key and transparency ledger without involving any master keys.
+
 ### Embedding Pipeline
 
 ```
@@ -236,6 +240,9 @@ Used when a device wants to prove it embedded a specific image.
 Requires `K_master_secret`. The authority server re-derives the device's private key from the master secret using the `device_id` and `nonce` stored in the certificate, then runs the same extraction as Layer 3.
 
 Used as the last resort for heavily modified images where ledger lookup fails. The authority server can search its internal database of all embeddings to find the correct original pHash.
+
+> [!CAUTION]
+> Because Layer 4 extraction requires access to the `K_master_secret`, it is subject to strict operational and legal controls. It is only initiated under **extremely exceptional circumstances**—such as formal court orders or specialized legal requests.
 
 ---
 
