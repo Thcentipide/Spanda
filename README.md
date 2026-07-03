@@ -1,4 +1,4 @@
-# Setu — AI Image Watermarking System
+# Spanda — AI Image Watermarking System
 
 An open-source Rust system for embedding cryptographically verifiable watermarks into AI-generated images. The watermark is a permanent, measurable modification to the frequency-domain content of the image — not metadata, not steganographic bit-flipping, not an invisible overlay.
 
@@ -318,7 +318,7 @@ The ledger is an append-only binary Merkle tree. Each leaf is `SHA256(CBOR-encod
 ## Crate Structure
 
 ```
-setu/
+spanda/
 ├── Cargo.toml                     # workspace root
 ├── crates/
 │   ├── wm-core/                   # Image processing primitives
