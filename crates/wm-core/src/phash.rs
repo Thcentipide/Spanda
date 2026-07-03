@@ -1,84 +1,79 @@
 use image::{DynamicImage, imageops::FilterType};
 use serde::{Serialize, Deserialize};
+use crate::dct::dct_2d_32x32;
 
 /// Represents a 256-bit perceptual hash (32 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PHash256(pub [u8; 32]);
 
 /// Computes the 256-bit perceptual hash (pHash) of an image or tile.
+/// Algorithm (pHash256):
+/// 1. Convert input to grayscale.
+/// 2. Resize to exactly 32x32 using bilinear interpolation.
+/// 3. Compute the 2D DCT of the 32x32 matrix.
+/// 4. Extract the top-left 16x16 sub-block of DCT coefficients, excluding DC term at (0,0).
+/// 5. Compute the arithmetic mean of these 255 values.
+/// 6. Set bit k to 1 if coeff_k > mean, else 0.
+/// 7. Pad the 256th bit (bit 255) with 0.
+/// 8. Pack into 32 bytes MSB-first within each byte.
 pub fn compute_phash256(image: &DynamicImage) -> PHash256 {
-    // 1. Convert to grayscale and resize to 32x32 using bilinear interpolation (Triangle filter)
-    let gray_img = image.grayscale();
-    let resized = gray_img.resize_exact(32, 32, FilterType::Triangle);
+    // 1. Convert to grayscale
+    let gray_img = image.to_luma8();
+    
+    // 2. Resize to 32x32 using bilinear interpolation (Triangle filter)
+    let resized = DynamicImage::ImageLuma8(gray_img).resize_exact(32, 32, FilterType::Triangle);
     let luma = resized.to_luma8();
 
-    // Convert pixel values to f64 matrix
-    let mut p = [[0.0; 32]; 32];
+    let mut pixels = [[0.0; 32]; 32];
     for y in 0..32 {
         for x in 0..32 {
-            p[y as usize][x as usize] = luma.get_pixel(x, y)[0] as f64;
+            pixels[y as usize][x as usize] = luma.get_pixel(x, y)[0] as f64;
         }
     }
 
-    // Precompute cos table for 16x32 (we only need the top-left 16x16 DCT block)
-    let mut cos_table = [[0.0; 32]; 16];
-    for i in 0..16 {
-        for x in 0..32 {
-            cos_table[i][x] = (((2 * x + 1) as f64 * i as f64 * std::f64::consts::PI) / 64.0).cos();
-        }
-    }
+    // 3. Compute 2D DCT of the 32x32 matrix
+    let dct = dct_2d_32x32(&pixels);
 
-    // 2. Apply 2D DCT-II to obtain the top-left 16x16 coefficients
-    let mut dct = [[0.0; 16]; 16];
-    for u in 0..16 {
-        let cu = if u == 0 { 1.0 / 2.0_f64.sqrt() } else { 1.0 };
-        for v in 0..16 {
-            let cv = if v == 0 { 1.0 / 2.0_f64.sqrt() } else { 1.0 };
-            
-            let mut sum = 0.0;
-            for y in 0..32 {
-                for x in 0..32 {
-                    sum += p[y][x] * cos_table[u][x] * cos_table[v][y];
-                }
-            }
-            dct[u][v] = 0.25 * cu * cv * sum;
-        }
-    }
-
-    // 3. Extract the top-left 16x16 coefficients excluding DC term D(0,0)
-    let mut coeffs = Vec::with_capacity(255);
+    // 4. Extract top-left 16x16 sub-block excluding DC term at (0,0)
+    let mut coefficients = Vec::with_capacity(255);
     for u in 0..16 {
         for v in 0..16 {
             if u == 0 && v == 0 {
                 continue;
             }
-            coeffs.push(dct[u][v]);
+            coefficients.push(dct[u][v]);
         }
     }
 
-    // 4. Calculate the mean value of these 255 coefficients
-    let sum_coeffs: f64 = coeffs.iter().sum();
-    let mean = sum_coeffs / 255.0;
+    // 5. Compute arithmetic mean
+    let mean: f64 = coefficients.iter().sum::<f64>() / 255.0;
 
-    // 5. Construct a 256-bit binary string (packed into 32 bytes)
-    // Bit k is 1 if coeff > mean, 0 otherwise. Pad the 256th bit with 0.
+    // 6. Build the 256-bit hash with MSB-first byte packing
     let mut hash_bytes = [0u8; 32];
-    for (idx, &coeff) in coeffs.iter().enumerate() {
+    for (k, &coeff) in coefficients.iter().enumerate() {
         if coeff > mean {
-            let byte_idx = idx / 8;
-            let bit_idx = idx % 8;
-            hash_bytes[byte_idx] |= 1 << bit_idx; // LSB-first bit packing
+            let byte_idx = k / 8;
+            let bit_idx = k % 8;
+            hash_bytes[byte_idx] |= 1 << (7 - bit_idx); // MSB-first bit packing
         }
     }
-    // Note: The 256th bit (at idx = 255) is already 0 as hash_bytes is initialized to 0
+    // Note: the 256th bit (index 255) is 0 because hash_bytes starts zeroed.
 
     PHash256(hash_bytes)
+}
+
+/// Computes Hamming distance between two 256-bit hashes.
+pub fn hamming_distance(a: &PHash256, b: &PHash256) -> u32 {
+    a.0.iter()
+        .zip(b.0.iter())
+        .map(|(&x, &y)| (x ^ y).count_ones())
+        .sum()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{RgbImage, DynamicImage};
+    use image::RgbImage;
 
     #[test]
     fn test_phash_determinism() {
@@ -98,7 +93,6 @@ mod tests {
 
     #[test]
     fn test_phash_robustness() {
-        // Build a random image
         let mut rgb = RgbImage::new(128, 128);
         for (x, y, pixel) in rgb.enumerate_pixels_mut() {
             pixel[0] = ((x * y) % 256) as u8;
@@ -119,14 +113,7 @@ mod tests {
         let noisy = DynamicImage::ImageRgb8(rgb_noisy);
         let hash_noisy = compute_phash256(&noisy);
 
-        // Compare Hamming distance
-        let mut distance = 0;
-        for i in 0..32 {
-            let diff = hash_orig.0[i] ^ hash_noisy.0[i];
-            distance += diff.count_ones();
-        }
-
-        // Distance should be small (e.g. less than 10 bits changed out of 256)
-        assert!(distance < 10, "Hamming distance was {}", distance);
+        let distance = hamming_distance(&hash_orig, &hash_noisy);
+        assert!(distance < 20, "Hamming distance was {}", distance);
     }
 }

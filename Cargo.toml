@@ -15,6 +15,7 @@ rustfft = "6.2.0"
 num-complex = "0.4.6"
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 hkdf = "0.12.4"
+hmac = "0.12.1"
 sha2 = "0.10.8"
 rand = "0.8.5"
 rand_chacha = "0.3.1"

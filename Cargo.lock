@@ -1563,11 +1563,15 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "wm-core"
 version = "0.1.0"
 dependencies = [
+ "hmac",
  "image",
  "num-complex",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

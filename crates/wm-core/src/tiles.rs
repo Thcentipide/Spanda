@@ -1,105 +1,82 @@
 use crate::color::YCbCrImage;
+use image::DynamicImage;
 use serde::{Serialize, Deserialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-/// Represents the physical coordinate metadata of a tile in the grid.
+pub const TILE_SIZE: u32 = 256;
+
+/// Represents the tile grid configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TilePosition {
-    /// Column index of the tile (0-indexed).
-    pub tile_x: u16,
-    /// Row index of the tile (0-indexed).
-    pub tile_y: u16,
-    /// Pixel X start coordinate in the source image.
-    pub x: u32,
-    /// Pixel Y start coordinate in the source image.
-    pub y: u32,
-}
-
-/// Represents the tile grid configuration and positions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImageGrid {
+pub struct Grid {
     /// Number of tiles horizontally.
-    pub tiles_x: u16,
+    pub tiles_x: u32,
     /// Number of tiles vertically.
-    pub tiles_y: u16,
-    /// Metadata for each tile in the grid in row-major order.
-    pub tile_positions: Vec<TilePosition>,
+    pub tiles_y: u32,
+    /// Total number of tiles in the grid.
+    pub total_tiles: u32,
 }
 
-/// Computes the tile grid dimensions and metadata for an image.
+/// Helper struct for image metadata storage and extraction.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GridMetadata {
+    pub tiles_x: u32,
+    pub tiles_y: u32,
+    pub tile_size: u32,
+    pub positions: Vec<[u32; 2]>,
+}
+
+/// Computes the tile grid dimensions for an image.
 /// The image must be at least 256x256 pixels.
-pub fn compute_grid(width: u32, height: u32) -> Option<ImageGrid> {
-    if width < 256 || height < 256 {
+pub fn compute_grid(width: u32, height: u32) -> Option<Grid> {
+    if width < TILE_SIZE || height < TILE_SIZE {
         return None;
     }
-
-    let tiles_x = (width / 256) as u16;
-    let tiles_y = (height / 256) as u16;
-    let mut tile_positions = Vec::with_capacity((tiles_x * tiles_y) as usize);
-
-    for ty in 0..tiles_y {
-        for tx in 0..tiles_x {
-            tile_positions.push(TilePosition {
-                tile_x: tx,
-                tile_y: ty,
-                x: (tx as u32) * 256,
-                y: (ty as u32) * 256,
-            });
-        }
-    }
-
-    Some(ImageGrid {
+    let tiles_x = width / TILE_SIZE;
+    let tiles_y = height / TILE_SIZE;
+    Some(Grid {
         tiles_x,
         tiles_y,
-        tile_positions,
+        total_tiles: tiles_x * tiles_y,
     })
 }
 
-/// Extracts a 256x256 pixel sub-image (tile) from a YCbCrImage at the specified position.
-pub fn extract_tile(img: &YCbCrImage, pos: &TilePosition) -> YCbCrImage {
-    let mut y = Vec::with_capacity(256 * 256);
-    let mut cb = Vec::with_capacity(256 * 256);
-    let mut cr = Vec::with_capacity(256 * 256);
-
-    for dy in 0..256 {
-        let y_coord = pos.y + dy;
-        let row_offset = (y_coord * img.width) as usize;
-        for dx in 0..256 {
-            let x_coord = pos.x + dx;
-            let idx = row_offset + (x_coord as usize);
-            y.push(img.y[idx]);
-            cb.push(img.cb[idx]);
-            cr.push(img.cr[idx]);
-        }
-    }
-
-    YCbCrImage {
-        width: 256,
-        height: 256,
-        y,
-        cb,
-        cr,
+/// Extracts a 256x256 pixel sub-image (tile) from a DynamicImage at the specified position.
+pub fn extract_tile_at(image: &DynamicImage, pos: (u32, u32)) -> Option<DynamicImage> {
+    let (x, y) = pos;
+    if x + TILE_SIZE <= image.width() && y + TILE_SIZE <= image.height() {
+        Some(image.crop_imm(x, y, TILE_SIZE, TILE_SIZE))
+    } else {
+        None
     }
 }
 
-/// Writes a 256x256 processed tile back into the source YCbCrImage buffer.
-pub fn insert_tile(img: &mut YCbCrImage, tile: &YCbCrImage, pos: &TilePosition) {
-    assert_eq!(tile.width, 256);
-    assert_eq!(tile.height, 256);
+/// Extracts a tile's Y (luminance) channel values from a YCbCrImage at the given pixel coordinates.
+/// Returns a flat vector of size 256 * 256 = 65,536 in row-major order.
+pub fn extract_tile_y_channel(image: &YCbCrImage, x: u32, y: u32) -> Vec<f64> {
+    let mut tile = vec![0.0; (TILE_SIZE * TILE_SIZE) as usize];
+    for dy in 0..TILE_SIZE {
+        let y_coord = y + dy;
+        let row_offset = (y_coord * image.width) as usize;
+        let tile_offset = (dy * TILE_SIZE) as usize;
+        for dx in 0..TILE_SIZE {
+            let x_coord = x + dx;
+            tile[tile_offset + dx as usize] = image.y[row_offset + x_coord as usize];
+        }
+    }
+    tile
+}
 
-    for dy in 0..256 {
-        let y_coord = pos.y + dy;
-        let img_row_offset = (y_coord * img.width) as usize;
-        let tile_row_offset = (dy * 256) as usize;
-        for dx in 0..256 {
-            let x_coord = pos.x + dx;
-            let img_idx = img_row_offset + (x_coord as usize);
-            let tile_idx = tile_row_offset + (dx as usize);
-            img.y[img_idx] = tile.y[tile_idx];
-            img.cb[img_idx] = tile.cb[tile_idx];
-            img.cr[img_idx] = tile.cr[tile_idx];
+/// Writes a modified tile's Y channel values back into the source YCbCrImage buffer.
+pub fn write_tile_y_channel(image: &mut YCbCrImage, x: u32, y: u32, tile: &[f64]) {
+    for dy in 0..TILE_SIZE {
+        let y_coord = y + dy;
+        let row_offset = (y_coord * image.width) as usize;
+        let tile_offset = (dy * TILE_SIZE) as usize;
+        for dx in 0..TILE_SIZE {
+            let x_coord = x + dx;
+            image.y[row_offset + x_coord as usize] = tile[tile_offset + dx as usize];
         }
     }
 }
@@ -120,8 +97,8 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Serializes and embeds the tile grid layout into a PNG image file's custom text chunk.
-pub fn embed_grid_metadata(file_path: &Path, grid: &ImageGrid) -> Result<(), std::io::Error> {
+/// Serializes and embeds the tile grid layout metadata into a PNG image file's custom text chunk.
+pub fn embed_grid_metadata(file_path: &Path, grid_meta: &GridMetadata) -> Result<(), std::io::Error> {
     let mut file = File::open(file_path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
@@ -134,7 +111,7 @@ pub fn embed_grid_metadata(file_path: &Path, grid: &ImageGrid) -> Result<(), std
         ));
     }
 
-    let json_str = serde_json::to_string(grid).map_err(|e| {
+    let json_str = serde_json::to_string(grid_meta).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
     })?;
 
@@ -200,8 +177,8 @@ pub fn embed_grid_metadata(file_path: &Path, grid: &ImageGrid) -> Result<(), std
     Ok(())
 }
 
-/// Extracts the embedded grid layout from a PNG image file's custom text chunk.
-pub fn extract_grid_metadata(file_path: &Path) -> Option<ImageGrid> {
+/// Extracts the embedded grid layout metadata from a PNG image file's custom text chunk.
+pub fn extract_grid_metadata(file_path: &Path) -> Option<GridMetadata> {
     let mut file = File::open(file_path).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
@@ -233,8 +210,8 @@ pub fn extract_grid_metadata(file_path: &Path) -> Option<ImageGrid> {
             if data.starts_with(b"wm_grid_metadata\0") {
                 let json_bytes = &data[17..]; // Skip "wm_grid_metadata\0" (17 bytes)
                 if let Ok(json_str) = std::str::from_utf8(json_bytes) {
-                    if let Ok(grid) = serde_json::from_str::<ImageGrid>(json_str) {
-                        return Some(grid);
+                    if let Ok(grid_meta) = serde_json::from_str::<GridMetadata>(json_str) {
+                        return Some(grid_meta);
                     }
                 }
             }
@@ -258,9 +235,7 @@ mod tests {
         let grid = compute_grid(512, 300).unwrap();
         assert_eq!(grid.tiles_x, 2);
         assert_eq!(grid.tiles_y, 1);
-        assert_eq!(grid.tile_positions.len(), 2);
-        assert_eq!(grid.tile_positions[0], TilePosition { tile_x: 0, tile_y: 0, x: 0, y: 0 });
-        assert_eq!(grid.tile_positions[1], TilePosition { tile_x: 1, tile_y: 0, x: 256, y: 0 });
+        assert_eq!(grid.total_tiles, 2);
     }
 
     #[test]
@@ -268,27 +243,22 @@ mod tests {
         let mut img = YCbCrImage {
             width: 512,
             height: 256,
-            y: (0..512*256).map(|v| v as f64 + 1.0).collect(), // Add 1.0 to avoid 0.0 at index 0
+            y: (0..512*256).map(|v| v as f64 + 1.0).collect(),
             cb: (0..512*256).map(|v| (v as f64 + 1.0) * 0.1).collect(),
             cr: (0..512*256).map(|v| (v as f64 + 1.0) * 0.2).collect(),
         };
 
-        let grid = compute_grid(img.width, img.height).unwrap();
-        let pos1 = grid.tile_positions[1]; // x = 256, y = 0
-        
-        let tile = extract_tile(&img, &pos1);
-        assert_eq!(tile.width, 256);
-        assert_eq!(tile.height, 256);
+        let tile = extract_tile_y_channel(&img, 256, 0);
+        assert_eq!(tile.len(), 256 * 256);
         
         // Verify values are from the correct region
-        assert_eq!(tile.y[0], img.y[256]);
-        assert_eq!(tile.y[256], img.y[256 + 512]);
+        assert_eq!(tile[0], img.y[256]);
+        assert_eq!(tile[256], img.y[256 + 512]);
 
         // Modify tile Y channel
-        let mut modified_tile = tile;
-        modified_tile.y = vec![0.0; 256 * 256];
+        let modified_tile = vec![0.0; 256 * 256];
 
-        insert_tile(&mut img, &modified_tile, &pos1);
+        write_tile_y_channel(&mut img, 256, 0, &modified_tile);
         // Verify changes are written back to the correct region
         assert_eq!(img.y[256], 0.0);
         assert_eq!(img.y[256 + 512], 0.0);
@@ -298,11 +268,13 @@ mod tests {
 
     #[test]
     fn test_metadata_embedding_round_trip() {
-        // Create a dummy grid
-        let grid = compute_grid(512, 512).unwrap();
+        let grid_meta = GridMetadata {
+            tiles_x: 2,
+            tiles_y: 2,
+            tile_size: 256,
+            positions: vec![[0, 0], [256, 0], [0, 256], [256, 256]],
+        };
         
-        // Create a minimal valid 1x1 PNG file in memory to test embedding
-        // PNG Signature (8 bytes) + IHDR Chunk (25 bytes) + IEND Chunk (12 bytes)
         let dummy_png_bytes: [u8; 45] = [
             137, 80, 78, 71, 13, 10, 26, 10, // signature
             0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 110, 255, 63, // IHDR
@@ -315,14 +287,14 @@ mod tests {
             file.write_all(&dummy_png_bytes).unwrap();
         }
         
-        // Embed the grid
-        embed_grid_metadata(temp_path, &grid).unwrap();
+        // Embed the grid metadata
+        embed_grid_metadata(temp_path, &grid_meta).unwrap();
         
-        // Extract the grid
-        let extracted_grid = extract_grid_metadata(temp_path).unwrap();
-        assert_eq!(extracted_grid.tiles_x, grid.tiles_x);
-        assert_eq!(extracted_grid.tiles_y, grid.tiles_y);
-        assert_eq!(extracted_grid.tile_positions.len(), grid.tile_positions.len());
+        // Extract the grid metadata
+        let extracted_meta = extract_grid_metadata(temp_path).unwrap();
+        assert_eq!(extracted_meta.tiles_x, grid_meta.tiles_x);
+        assert_eq!(extracted_meta.tiles_y, grid_meta.tiles_y);
+        assert_eq!(extracted_meta.positions.len(), grid_meta.positions.len());
         
         // Cleanup
         std::fs::remove_file(temp_path).ok();
